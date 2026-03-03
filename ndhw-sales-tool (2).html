@@ -1,0 +1,1086 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>NDHW Discovery Call</title>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'DM Sans', sans-serif;
+      background: #1a1c20;
+      color: #e8e4de;
+      -webkit-font-smoothing: antialiased;
+      overflow: hidden;
+      height: 100dvh;
+      touch-action: manipulation;
+    }
+    input, select, textarea {
+      font-family: 'DM Sans', sans-serif;
+      border: none; outline: none;
+      font-size: 16px; /* prevent iOS zoom */
+    }
+    input[type="number"] { -moz-appearance: textfield; }
+    input[type="number"]::-webkit-inner-spin-button,
+    input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; }
+    ::-webkit-scrollbar { width: 4px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #3a3d44; border-radius: 3px; }
+    ::selection { background: #4a7c5944; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+    @keyframes slideUp { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: translateY(0); } }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+    const { useState, useRef, useEffect, useMemo } = React;
+
+    /* ═══════════════════════════════════════
+       PRICING ENGINE — $60 BASE
+    ═══════════════════════════════════════ */
+    const PRICING = {
+      base: 60,
+      size: { 0: 0, 2500: 10, 4000: 20, 6000: 30, 8000: 40, 10000: 50 },
+      exposure: { inland: 0, coastal: 0, oceanfront: 25 },
+      type: { house: 0, townhouse: 0, condo: -10 },
+      zone: { primary: 0, extended: 15, outer: 25 },
+    };
+
+    function getSizeTier(sqft) {
+      if (!sqft || sqft <= 0) return { tier: "—", fee: 0 };
+      const t = [[10000,"10,000+"],[8000,"8,000–10,000"],[6000,"6,000–8,000"],[4000,"4,000–6,000"],[2500,"2,500–4,000"],[0,"Under 2,500"]];
+      for (const [th, lb] of t) { if (sqft >= th) return { tier: lb, fee: PRICING.size[th] }; }
+      return { tier: "Under 2,500", fee: 0 };
+    }
+
+    function calcRate(d) {
+      const sqft = d.sqft || 0;
+      const { tier, fee: sizeFee } = getSizeTier(sqft);
+      const rawExpFee = PRICING.exposure[d.exposure || "inland"] || 0;
+      const typeKey = d.homeType || "house";
+      const expFee = typeKey === "condo" ? 0 : rawExpFee;
+      const expWaived = typeKey === "condo" && rawExpFee > 0;
+      const typeFee = PRICING.type[typeKey] || 0;
+      const zoneFee = PRICING.zone[d.zone || "primary"] || 0;
+      const total = PRICING.base + sizeFee + expFee + typeFee + zoneFee;
+      return { base: PRICING.base, sizeTier: tier, sizeFee, expFee, rawExpFee, expWaived, typeFee, zoneFee, total };
+    }
+
+    /* ═══════════════════════════════════════
+       PDF GENERATOR
+    ═══════════════════════════════════════ */
+    function generatePDF(data, rate, discount) {
+      const { jsPDF } = window.jspdf;
+      const doc = new jsPDF({ unit: "pt", format: "letter" });
+      const W = 612, H = 792;
+      const mg = { l: 50, r: 50, t: 50 };
+      const cw = W - mg.l - mg.r;
+      let y = mg.t;
+
+      const green = [58, 107, 71];
+      const dark = [42, 37, 32];
+      const mid = [122, 117, 108];
+      const light = [160, 154, 144];
+
+      // Header
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(10);
+      doc.setTextColor(...green);
+      doc.text("NEXT DOOR HOME WATCH", mg.l, y);
+      doc.setFontSize(8);
+      doc.setTextColor(...light);
+      doc.text("Licensed & Insured", mg.l, y + 14);
+      doc.setFontSize(8);
+      doc.text(new Date().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" }), W - mg.r, y, { align: "right" });
+      y += 40;
+
+      // Divider
+      doc.setDrawColor(...green);
+      doc.setLineWidth(1.5);
+      doc.line(mg.l, y, W - mg.r, y);
+      y += 30;
+
+      // Title
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(20);
+      doc.setTextColor(...dark);
+      doc.text("Service Quote", mg.l, y);
+      y += 10;
+
+      // Prospect info
+      const name = [data.firstName, data.lastName].filter(Boolean).join(" ");
+      if (name) {
+        y += 20;
+        doc.setFontSize(11);
+        doc.setTextColor(...dark);
+        doc.text(`Prepared for: ${name}`, mg.l, y);
+      }
+      if (data.address) {
+        y += 16;
+        doc.setFontSize(9);
+        doc.setTextColor(...mid);
+        doc.text(data.address, mg.l, y);
+      }
+      y += 30;
+
+      // Property details box
+      doc.setFillColor(247, 245, 240);
+      doc.roundedRect(mg.l, y, cw, 80, 4, 4, "F");
+      const boxY = y + 20;
+      doc.setFontSize(8);
+      doc.setTextColor(...light);
+      doc.text("PROPERTY TYPE", mg.l + 16, boxY);
+      doc.text("SIZE", mg.l + 140, boxY);
+      doc.text("EXPOSURE", mg.l + 260, boxY);
+      doc.text("ZONE", mg.l + 380, boxY);
+
+      doc.setFontSize(11);
+      doc.setTextColor(...dark);
+      const typeLabel = { house: "House", townhouse: "Townhouse", condo: "Condo" }[data.homeType] || "—";
+      const expLabel = { inland: "Inland", coastal: "Coastal", oceanfront: "Oceanfront" }[data.exposure] || "—";
+      const zoneLabel = { primary: "Primary", extended: "Extended", outer: "Outer" }[data.zone] || "—";
+      doc.text(typeLabel, mg.l + 16, boxY + 18);
+      doc.text(data.sqft ? `${parseInt(data.sqft).toLocaleString()} sq ft` : "—", mg.l + 140, boxY + 18);
+      doc.text(expLabel, mg.l + 260, boxY + 18);
+      doc.text(zoneLabel, mg.l + 380, boxY + 18);
+      y += 100;
+
+      // Rate breakdown
+      doc.setFontSize(8);
+      doc.setTextColor(...light);
+      doc.text("RATE BREAKDOWN", mg.l, y);
+      y += 16;
+
+      const rows = [
+        ["Base Rate", `$${rate.base}`],
+        ["Size Adjustment (" + rate.sizeTier + ")", rate.sizeFee === 0 ? "Included" : `+$${rate.sizeFee}`],
+      ];
+      if (rate.expWaived) rows.push(["Exposure (waived — condo)", "$0"]);
+      else if (rate.expFee > 0) rows.push(["Oceanfront Exposure", `+$${rate.expFee}`]);
+      if (rate.typeFee !== 0) rows.push(["Property Type (" + typeLabel + ")", `${rate.typeFee > 0 ? "+" : "-"}$${Math.abs(rate.typeFee)}`]);
+      if (rate.zoneFee > 0) rows.push(["Zone Surcharge (" + zoneLabel + ")", `+$${rate.zoneFee}`]);
+
+      doc.setFontSize(10);
+      rows.forEach(([label, val]) => {
+        doc.setTextColor(...mid);
+        doc.text(label, mg.l + 8, y);
+        doc.setTextColor(...dark);
+        doc.text(val, W - mg.r - 8, y, { align: "right" });
+        y += 18;
+      });
+
+      // Total line
+      y += 4;
+      doc.setDrawColor(220, 216, 210);
+      doc.setLineWidth(0.5);
+      doc.line(mg.l, y, W - mg.r, y);
+      y += 20;
+
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(14);
+      doc.setTextColor(...dark);
+      doc.text("Weekly Visit Rate", mg.l + 8, y);
+      doc.setTextColor(...green);
+      doc.text(`$${rate.total}`, W - mg.r - 8, y, { align: "right" });
+      y += 22;
+
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(10);
+      doc.setTextColor(...mid);
+      doc.text(`$${rate.total * 4}/month  ·  $${rate.total * 52}/year`, mg.l + 8, y);
+      y += 16;
+
+      // Discount section
+      if (discount && discount > 0) {
+        y += 10;
+        const discAmt = Math.round(rate.total * 4 * (discount / 100));
+        const discMonthly = rate.total * 4 - discAmt;
+        doc.setFillColor(58, 107, 71, 0.08);
+        doc.roundedRect(mg.l, y, cw, 54, 4, 4, "F");
+        doc.setDrawColor(...green);
+        doc.setLineWidth(0.5);
+        doc.roundedRect(mg.l, y, cw, 54, 4, 4, "S");
+
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(9);
+        doc.setTextColor(...green);
+        doc.text(`90-DAY ONBOARDING: ${discount}% OFF`, mg.l + 16, y + 18);
+        doc.setFont("helvetica", "normal");
+        doc.setFontSize(10);
+        doc.setTextColor(...dark);
+        doc.text(`$${discMonthly}/month for 3 months (save $${discAmt * 3} total)`, mg.l + 16, y + 36);
+        y += 70;
+      }
+
+      y += 20;
+
+      // Service description
+      doc.setFontSize(8);
+      doc.setTextColor(...light);
+      doc.text("SERVICE INCLUDES", mg.l, y);
+      y += 16;
+
+      const services = [
+        "Systematic weekly interior & exterior visual inspection",
+        "Water intrusion, HVAC, appliance & security checks",
+        "Photo-documented reporting after every visit",
+        "Vendor coordination & supervised access when needed",
+        "Issue escalation, diagnosis & resolution management",
+      ];
+      doc.setFontSize(9.5);
+      doc.setTextColor(...mid);
+      services.forEach(s => {
+        doc.text("•  " + s, mg.l + 8, y);
+        y += 16;
+      });
+
+      y += 20;
+
+      // Add-on rates
+      doc.setFontSize(8);
+      doc.setTextColor(...light);
+      doc.text("ADD-ON SERVICES", mg.l, y);
+      y += 16;
+
+      const addons = [
+        ["Vendor Coordination", "$65/hr (15-min increments)"],
+        ["Onsite Vendor Supervision", "$95 first hr, $65/hr after"],
+        ["Incident Response", "$95/hr"],
+        ["General Labor", "$85/hr (under 15 min included)"],
+        ["Materials Procurement", "$65/hr + $20 online orders"],
+        ["Package Forwarding", "$30/trip + $20 same-day rush"],
+      ];
+      doc.setFontSize(9);
+      addons.forEach(([label, val]) => {
+        doc.setTextColor(...mid);
+        doc.text(label, mg.l + 8, y);
+        doc.setTextColor(...dark);
+        doc.text(val, W - mg.r - 8, y, { align: "right" });
+        y += 15;
+      });
+
+      // Footer
+      doc.setDrawColor(220, 216, 210);
+      doc.setLineWidth(0.5);
+      doc.line(mg.l, H - 60, W - mg.r, H - 60);
+      doc.setFontSize(8);
+      doc.setTextColor(...light);
+      doc.text("Next Door Home Watch  ·  Licensed & Insured  ·  Palm Coast · Flagler Beach · St. Augustine Beach · Vilano Beach", W / 2, H - 40, { align: "center" });
+      doc.text("This quote is valid for 30 days from the date above.", W / 2, H - 28, { align: "center" });
+
+      const fname = name ? `NDHW-Quote-${name.replace(/\s+/g, "-")}` : "NDHW-Quote";
+      doc.save(`${fname}.pdf`);
+    }
+
+    /* ═══════════════════════════════════════
+       COACHING DATABASE
+    ═══════════════════════════════════════ */
+    const COACHING = {
+      frame: {
+        script: `"Absolutely, I'd be happy to walk you through how our service works. First, let me learn a little about the property so I can recommend the right level of oversight."`,
+        tip: "This frames YOU as the expert. You're recommending, not selling. Don't deviate. Say this verbatim every time."
+      },
+      propertyType: {
+        condo: "Condos = simpler exterior, HOA handles that. Exposure waiver auto-applies. Usually lower rate — good entry point.",
+        house: "Full interior + exterior scope. Size and exposure matter most here.",
+        townhouse: "Priced like a house. Watch for shared walls masking neighbor water damage."
+      },
+      exposure: {
+        inland: "Standard risk. No surcharge. Easy sell.",
+        coastal: "Zeroed out in FL — everyone's coastal. Don't mention this tier to customer.",
+        oceanfront: "Direct oceanfront = +$25. Salt air, storm surge, moisture intrusion. These homes NEED weekly. Lean into the risk."
+      },
+      zone: {
+        primary: "Core routes. Best margins. Priority fill.",
+        extended: "+$15. Worth it only if you're already running a route nearby.",
+        outer: "+$25. Only take if Turtle Shores or 3+ on route. Say: 'Subject to route availability.'"
+      },
+      vacancy: {
+        seasonal: "Recurring seasonal = your ideal client. Predictable revenue. Lock them in.",
+        temporary: "Temporary — still pitch weekly. Many convert to seasonal once they experience the service.",
+        fulltime: "Full-time vacant second home = maximum risk, maximum value. These are premium clients.",
+        unknown: "Vague on timeline = price shopping. Qualify harder."
+      },
+      currentCoverage: {
+        nobody: "Nobody watching = highest urgency. 'For a vacant property with no monitoring, weekly oversight is the responsible approach.'",
+        neighbor: "Don't attack. Contrast: 'What we do differently is structure and documentation.'",
+        cleaner: "Cleaner ≠ home watch. 'We focus on identifying issues before they escalate — that's a different discipline.'",
+        pm: "PM probably isn't doing weekly walkthroughs. 'We complement that with boots-on-the-ground inspection every week.'"
+      },
+      reanchors: [
+        { id: "cost_of_delay", label: "Cost of Delay", script: `"The real cost isn't the leak — it's the three weeks nobody knew about it."`, tip: "Best for prospects who've had past issues. Makes it visceral." },
+        { id: "prevention_frame", label: "Prevention Frame", script: `"Most damage we prevent isn't from stopping the event — it's from catching it before it escalates."`, tip: "Best for analytical / logical prospects. Positions you as early detection, not a security guard." },
+        { id: "dollar_anchor", label: "Dollar Anchor", script: `"A $200 repair becomes a $15,000 insurance claim when nobody's checking weekly."`, tip: "Best for price-sensitive prospects. Puts your fee in context against real loss." },
+      ],
+      close: {
+        script: `"The next step is a property onboarding walkthrough where we document the home, set up reporting, and activate service. Would you like to schedule that?"`,
+        tip: "Simple close. If they say yes, book it and get off the call. Don't oversell past this point."
+      }
+    };
+
+    /* ═══════════════════════════════════════
+       MAIN APP
+    ═══════════════════════════════════════ */
+    function App() {
+      const [step, setStep] = useState(0);
+      const [showCoach, setShowCoach] = useState(true);
+      const [customerView, setCustomerView] = useState(false);
+      const [discount, setDiscount] = useState(0);
+      const [notesOpen, setNotesOpen] = useState(false);
+      const scrollRef = useRef(null);
+
+      const [data, setData] = useState({
+        firstName: "", lastName: "", phone: "", email: "", address: "",
+        homeType: "", sqft: "", exposure: "", zone: "",
+        vacancyType: "", vacantMonths: "", hoaExterior: false,
+        hasPool: false, hasSpa: false, hasHotTub: false, hasElevator: false,
+        pastIssues: "", issueDetails: "",
+        insuranceClaims: "", insuranceVacant: "", biggestConcern: "",
+        smartShutoff: null, alarm: null, cameras: null, knownProblems: "",
+        currentCoverage: "", currentCoverageDetails: "",
+        startDate: "", decisionMaker: "", accessSolution: "",
+        notes: "",
+      });
+
+      const set = (k, v) => setData(prev => ({ ...prev, [k]: v }));
+
+      const rate = useMemo(() => {
+        if (!data.sqft || !data.homeType) return null;
+        return calcRate({ sqft: parseInt(data.sqft) || 0, exposure: data.exposure || "inland", homeType: data.homeType, zone: data.zone || "primary" });
+      }, [data.sqft, data.exposure, data.homeType, data.zone]);
+
+      const steps = [
+        { id: "frame", label: "Frame", icon: "🎯" },
+        { id: "property", label: "Property", icon: "🏠" },
+        { id: "risk", label: "Risk", icon: "⚡" },
+        { id: "coverage", label: "Coverage", icon: "🔍" },
+        { id: "logistics", label: "Logistics", icon: "📋" },
+        { id: "diagnose", label: "Diagnose", icon: "🩺" },
+        { id: "present", label: "Present", icon: "💰" },
+        { id: "close", label: "Close", icon: "🤝" },
+      ];
+
+      useEffect(() => { scrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' }); }, [step]);
+
+      const fullName = [data.firstName, data.lastName].filter(Boolean).join(" ");
+
+      // ─── THEME ─────────────────
+      const c = {
+        bg: "#1a1c20", card: "#22252b", border: "#2e3139", borderLight: "#383c46",
+        text: "#e8e4de", textMid: "#9b978f", textLight: "#6b6860",
+        accent: "#4a7c59", accentLight: "#5a9c6d", accentBg: "#4a7c5915",
+        warn: "#c9843a", warnBg: "#c9843a15",
+        red: "#c45c4a", redBg: "#c45c4a15",
+        blue: "#5a7eb5", blueBg: "#5a7eb515",
+        coach: "#c9843a", coachBg: "#c9843a10", coachBorder: "#c9843a30",
+      };
+      const mono = "'DM Mono', monospace";
+
+      // ─── SHARED COMPONENTS ─────
+      const inputStyle = {
+        background: c.bg, border: `1px solid ${c.border}`, borderRadius: 8,
+        padding: "12px 14px", fontSize: 16, color: c.text, width: "100%",
+        transition: "border-color 0.2s",
+      };
+
+      const chipStyle = (active, color = c.accent) => ({
+        display: "inline-flex", alignItems: "center", padding: "10px 16px",
+        borderRadius: 8, fontSize: 14, fontWeight: 500, cursor: "pointer",
+        transition: "all 0.15s", WebkitTapHighlightColor: "transparent",
+        background: active ? color + "20" : "transparent",
+        border: `1px solid ${active ? color + "60" : c.border}`,
+        color: active ? (color === c.textMid ? c.text : color) : c.textMid,
+      });
+
+      const toggleChip = (label, value, key) => (
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          {["Yes", "No", "Unknown"].map(opt => (
+            <div key={opt} onClick={() => set(key, opt.toLowerCase())}
+              style={chipStyle(data[key] === opt.toLowerCase(), opt === "Yes" ? c.accent : opt === "No" ? c.textMid : c.warn)}>
+              {opt}
+            </div>
+          ))}
+        </div>
+      );
+
+      const CoachTip = ({ children, type = "tip" }) => {
+        if (!showCoach) return null;
+        const s = { tip: { bg: c.coachBg, bdr: c.coachBorder, icon: "💡", label: "COACHING" }, script: { bg: c.blueBg, bdr: c.blue + "30", icon: "🎤", label: "SAY THIS" }, warning: { bg: c.redBg, bdr: c.red + "30", icon: "⚠️", label: "WARNING" }, insight: { bg: c.accentBg, bdr: c.accent + "30", icon: "🧠", label: "INSIGHT" } }[type] || { bg: c.coachBg, bdr: c.coachBorder, icon: "💡", label: "COACHING" };
+        return (
+          <div style={{ background: s.bg, border: `1px solid ${s.bdr}`, borderRadius: 8, padding: "12px 14px", marginTop: 10, animation: "fadeIn 0.3s ease" }}>
+            <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: "0.12em", color: s.bdr.replace("30",""), marginBottom: 5, display: "flex", alignItems: "center", gap: 5 }}>
+              <span>{s.icon}</span> {s.label} — YOUR EYES ONLY
+            </div>
+            <div style={{ fontSize: 13, lineHeight: 1.65, color: c.textMid }}>{children}</div>
+          </div>
+        );
+      };
+
+      const Label = ({ children }) => (
+        <div style={{ fontSize: 11, fontWeight: 600, color: c.textLight, letterSpacing: "0.05em", marginBottom: 6, marginTop: 18 }}>{children}</div>
+      );
+
+      const featureChip = (label, key) => (
+        <div onClick={() => set(key, !data[key])} style={chipStyle(data[key], c.accent)}>{label}</div>
+      );
+
+      // ─── PERSISTENT NOTES DRAWER ─────
+      const NotesDrawer = () => (
+        <div style={{
+          position: "fixed", bottom: notesOpen ? 72 : -300, left: 0, right: 0,
+          height: 260, background: c.card, borderTop: `1px solid ${c.border}`,
+          transition: "bottom 0.3s ease", zIndex: 800, padding: "12px 16px",
+          display: "flex", flexDirection: "column",
+        }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+            <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.1em", color: c.warn }}>📝 QUICK NOTES</span>
+            <div onClick={() => setNotesOpen(false)} style={{ fontSize: 12, color: c.textLight, cursor: "pointer", padding: "4px 8px" }}>✕ close</div>
+          </div>
+          <textarea
+            style={{ ...inputStyle, flex: 1, resize: "none", fontSize: 14, lineHeight: 1.6, background: c.bg }}
+            placeholder="Jot anything down — this persists across all steps..."
+            value={data.notes}
+            onChange={e => set("notes", e.target.value)}
+          />
+        </div>
+      );
+
+      // ─── STEP RENDERERS ─────
+
+      const renderFrame = () => (
+        <div style={{ animation: "slideUp 0.3s ease" }}>
+          <h2 style={{ fontSize: 20, fontWeight: 700, marginBottom: 4 }}>Frame the Call</h2>
+          <p style={{ fontSize: 13, color: c.textMid, marginBottom: 14 }}>Set the tone in 10 seconds. You lead.</p>
+
+          <CoachTip type="script">
+            <div style={{ fontStyle: "italic", fontSize: 14, lineHeight: 1.7, color: c.text }}>{COACHING.frame.script}</div>
+          </CoachTip>
+          <CoachTip type="tip">{COACHING.frame.tip}</CoachTip>
+
+          <Label>PROSPECT INFO</Label>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+            <input style={inputStyle} placeholder="First name" value={data.firstName} onChange={e => set("firstName", e.target.value)} />
+            <input style={inputStyle} placeholder="Last name" value={data.lastName} onChange={e => set("lastName", e.target.value)} />
+          </div>
+          <div style={{ display: "grid", gap: 8, marginTop: 8 }}>
+            <input style={inputStyle} placeholder="Phone" type="tel" value={data.phone} onChange={e => set("phone", e.target.value)} />
+            <input style={inputStyle} placeholder="Email" type="email" value={data.email} onChange={e => set("email", e.target.value)} />
+          </div>
+        </div>
+      );
+
+      const renderProperty = () => (
+        <div style={{ animation: "slideUp 0.3s ease" }}>
+          <h2 style={{ fontSize: 20, fontWeight: 700, marginBottom: 4 }}>Property Snapshot</h2>
+          <p style={{ fontSize: 13, color: c.textMid, marginBottom: 14 }}>Gather the pricing factors. You're underwriting risk.</p>
+
+          <Label>PROPERTY ADDRESS</Label>
+          <input style={inputStyle} placeholder="Street address, city, state, zip" value={data.address} onChange={e => set("address", e.target.value)} />
+
+          <Label>1. PROPERTY TYPE</Label>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            {[["house","🏡 House"],["townhouse","🏘️ Townhouse"],["condo","🏢 Condo"]].map(([v,l]) => (
+              <div key={v} onClick={() => set("homeType", v)} style={chipStyle(data.homeType === v)}>{l}</div>
+            ))}
+          </div>
+          {data.homeType && <CoachTip type="insight">{COACHING.propertyType[data.homeType]}</CoachTip>}
+
+          <Label>2. APPROXIMATE SQUARE FOOTAGE</Label>
+          <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+            <input style={{ ...inputStyle, width: 140 }} type="number" placeholder="e.g. 2800" value={data.sqft} onChange={e => set("sqft", e.target.value)} />
+            {data.sqft && <span style={{ fontSize: 12, color: c.accent, fontFamily: mono }}>{getSizeTier(parseInt(data.sqft)).tier} → +${getSizeTier(parseInt(data.sqft)).fee}</span>}
+          </div>
+
+          <Label>3. ENVIRONMENTAL EXPOSURE</Label>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            {[["inland","🌿 Inland"],["coastal","🌊 Coastal"],["oceanfront","🏖️ Direct Oceanfront"]].map(([v,l]) => (
+              <div key={v} onClick={() => set("exposure", v)} style={chipStyle(data.exposure === v, v === "oceanfront" ? c.warn : c.accent)}>{l}</div>
+            ))}
+          </div>
+          {data.exposure && <CoachTip type={data.exposure === "oceanfront" ? "warning" : "insight"}>{COACHING.exposure[data.exposure]}</CoachTip>}
+
+          <Label>4. SERVICE ZONE</Label>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            {[["primary","📍 Primary"],["extended","📍 Extended (+$15)"],["outer","📍 Outer (+$25)"]].map(([v,l]) => (
+              <div key={v} onClick={() => set("zone", v)} style={chipStyle(data.zone === v, v === "outer" ? c.warn : c.accent)}>{l}</div>
+            ))}
+          </div>
+          {data.zone && <CoachTip type={data.zone === "outer" ? "warning" : "tip"}>{COACHING.zone[data.zone]}</CoachTip>}
+
+          <Label>5. VACANCY DETAILS</Label>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            {[["seasonal","🔄 Seasonal"],["temporary","⏱️ Temporary"],["fulltime","🏚️ Full-Time Vacant"]].map(([v,l]) => (
+              <div key={v} onClick={() => set("vacancyType", v)} style={chipStyle(data.vacancyType === v)}>{l}</div>
+            ))}
+          </div>
+          {data.vacancyType && <CoachTip type="insight">{COACHING.vacancy[data.vacancyType]}</CoachTip>}
+          {data.vacancyType && (
+            <div style={{ marginTop: 10 }}>
+              <div style={{ fontSize: 12, color: c.textLight, marginBottom: 6 }}>Expected vacant months per year:</div>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                {[2,3,4,5,6,7,8,9,10,11,12].map(n => (
+                  <div key={n} onClick={() => set("vacantMonths", n)}
+                    style={{
+                      ...chipStyle(data.vacantMonths === n, n >= 6 ? c.warn : c.accent),
+                      padding: "8px 12px", minWidth: 40, justifyContent: "center",
+                    }}>
+                    {n}
+                  </div>
+                ))}
+              </div>
+              {data.vacantMonths >= 6 && <CoachTip type="insight">That's {data.vacantMonths} months of unoccupied exposure per year. Powerful in the diagnosis: "With {data.vacantMonths} months vacant annually..."</CoachTip>}
+            </div>
+          )}
+
+          <Label>6. HOA HANDLES EXTERIOR?</Label>
+          <div style={{ display: "flex", gap: 8 }}>
+            {[true, false].map(v => (
+              <div key={String(v)} onClick={() => set("hoaExterior", v)} style={chipStyle(data.hoaExterior === v)}>{v ? "Yes — HOA" : "No — Owner"}</div>
+            ))}
+          </div>
+
+          <Label>7. SPECIAL FEATURES</Label>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            {featureChip("🏊 Pool", "hasPool")}
+            {featureChip("💆 Spa", "hasSpa")}
+            {featureChip("🛁 Hot Tub", "hasHotTub")}
+            {featureChip("🛗 Elevator", "hasElevator")}
+          </div>
+          {(data.hasPool || data.hasSpa || data.hasHotTub) && <CoachTip type="insight">Water features add inspection scope and risk. Good justification for the rate — more to check, more that can go wrong.</CoachTip>}
+          {data.hasElevator && <CoachTip type="warning">Elevator = maintenance contract, potential entrapment risk if power fails. Ask who services it. You may need to verify it's on a maintenance plan.</CoachTip>}
+
+          {/* Live rate */}
+          {rate && (
+            <div style={{ marginTop: 20, padding: 16, background: c.accentBg, border: `1px solid ${c.accent}40`, borderRadius: 10 }}>
+              <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.1em", color: c.accent, marginBottom: 8 }}>LIVE RATE PREVIEW</div>
+              <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+                <span style={{ fontSize: 32, fontWeight: 700, fontFamily: mono, color: c.accent }}>${rate.total}</span>
+                <span style={{ fontSize: 13, color: c.textMid }}>/visit</span>
+                <span style={{ fontSize: 13, color: c.textLight }}>·</span>
+                <span style={{ fontSize: 13, color: c.textMid, fontFamily: mono }}>${rate.total * 4}/mo</span>
+              </div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginTop: 8 }}>
+                {[
+                  { l: "Base", v: `$${rate.base}`, s: true },
+                  { l: "Size", v: `+$${rate.sizeFee}`, s: rate.sizeFee !== 0 },
+                  { l: "Exposure", v: rate.expWaived ? "waived" : `+$${rate.expFee}`, s: rate.expFee !== 0 || rate.expWaived },
+                  { l: "Type", v: `${rate.typeFee>0?"+":"-"}$${Math.abs(rate.typeFee)}`, s: rate.typeFee !== 0 },
+                  { l: "Zone", v: `+$${rate.zoneFee}`, s: rate.zoneFee !== 0 },
+                ].filter(x => x.s).map(x => (
+                  <span key={x.l} style={{ fontSize: 11, fontFamily: mono, padding: "3px 8px", borderRadius: 4, background: c.bg, color: c.textMid, border: `1px solid ${c.border}` }}>{x.l}: {x.v}</span>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      );
+
+      const renderRisk = () => (
+        <div style={{ animation: "slideUp 0.3s ease" }}>
+          <h2 style={{ fontSize: 20, fontWeight: 700, marginBottom: 4 }}>Risk Triggers</h2>
+          <p style={{ fontSize: 13, color: c.textMid, marginBottom: 14 }}>Get them thinking about consequences. This builds urgency.</p>
+
+          <Label>1. PAST ISSUES WHILE AWAY?</Label>
+          <div style={{ display: "flex", gap: 8 }}>
+            {[["yes","Yes"],["no","No"]].map(([v,l]) => (
+              <div key={v} onClick={() => set("pastIssues", v)} style={chipStyle(data.pastIssues === v, v === "yes" ? c.warn : c.accent)}>{l}</div>
+            ))}
+          </div>
+          {data.pastIssues === "yes" && (
+            <>
+              <textarea style={{ ...inputStyle, marginTop: 8, minHeight: 60, resize: "vertical" }} placeholder="What happened? (leaks, HVAC, storm damage...)" value={data.issueDetails} onChange={e => set("issueDetails", e.target.value)} />
+              <CoachTip type="insight">Past incidents = your best selling tool. They KNOW what can go wrong. "That's exactly what structured weekly monitoring prevents."</CoachTip>
+            </>
+          )}
+          {data.pastIssues === "no" && <CoachTip type="tip">No past issues? Shift to: "Most damage we see happens to homes that never had a problem before — because nobody was watching."</CoachTip>}
+
+          <Label>2. INSURANCE CLAIMS (LAST 10 YEARS)?</Label>
+          <div style={{ display: "flex", gap: 8 }}>
+            {[["yes","Yes"],["no","No"],["unknown","Not sure"]].map(([v,l]) => (
+              <div key={v} onClick={() => set("insuranceClaims", v)} style={chipStyle(data.insuranceClaims === v, v === "yes" ? c.warn : c.accent)}>{l}</div>
+            ))}
+          </div>
+          {data.insuranceClaims === "yes" && <CoachTip type="insight">Insurance claims history = real risk signal. "Documented weekly monitoring strengthens your position with your insurer — and some carriers are starting to look at vacancy monitoring as part of their underwriting."</CoachTip>}
+
+          <Label>3. DOES YOUR INSURER KNOW IT'S VACANT?</Label>
+          <div style={{ display: "flex", gap: 8 }}>
+            {[["yes","Yes"],["no","No"],["unknown","Not sure"]].map(([v,l]) => (
+              <div key={v} onClick={() => set("insuranceVacant", v)} style={chipStyle(data.insuranceVacant === v, v === "no" ? c.red : c.accent)}>{l}</div>
+            ))}
+          </div>
+          {data.insuranceVacant === "no" && <CoachTip type="warning">This is a grenade. Many policies require vacancy notification — and claims can be denied without it. Don't give insurance advice. Just surface the concern: "That's worth checking on. Some policies have vacancy clauses."</CoachTip>}
+          {data.insuranceVacant === "unknown" && <CoachTip type="tip">Uncertainty here works in your favor. Plant the seed: "It's worth reviewing — some policies have specific vacancy provisions."</CoachTip>}
+
+          <Label>4. SMART WATER SHUTOFF?</Label>
+          {toggleChip("Smart shutoff", data.smartShutoff, "smartShutoff")}
+
+          <Label>5. ALARM SYSTEM?</Label>
+          {toggleChip("Alarm", data.alarm, "alarm")}
+
+          <Label>6. CAMERAS?</Label>
+          {toggleChip("Cameras", data.cameras, "cameras")}
+          {(data.smartShutoff === "yes" || data.alarm === "yes" || data.cameras === "yes") && (
+            <CoachTip type="insight">Smart devices detect — they don't respond. "Those systems are great for alerting. We're the response layer — someone physically inside the property every week confirming everything is functioning."</CoachTip>
+          )}
+
+          <Label>7. KNOWN PROBLEM AREAS?</Label>
+          <textarea style={{ ...inputStyle, minHeight: 60, resize: "vertical" }} placeholder="Pool pump, old AC, flat roof, etc." value={data.knownProblems} onChange={e => set("knownProblems", e.target.value)} />
+
+          <Label>8. BIGGEST CONCERN WHILE AWAY?</Label>
+          <textarea style={{ ...inputStyle, minHeight: 60, resize: "vertical" }} placeholder="What keeps you up at night about the property?" value={data.biggestConcern} onChange={e => set("biggestConcern", e.target.value)} />
+          <CoachTip type="insight">This is the emotional question. Whatever they say becomes your closing ammunition in the diagnosis. Write it down exactly as they say it — you'll echo it back.</CoachTip>
+        </div>
+      );
+
+      const renderCoverage = () => (
+        <div style={{ animation: "slideUp 0.3s ease" }}>
+          <h2 style={{ fontSize: 20, fontWeight: 700, marginBottom: 4 }}>Current Coverage</h2>
+          <p style={{ fontSize: 13, color: c.textMid, marginBottom: 14 }}>Who's watching it now? Contrast without attacking.</p>
+
+          <Label>WHO'S CHECKING ON IT?</Label>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            {[["nobody","🚫 Nobody"],["neighbor","🏘️ Neighbor"],["cleaner","🧹 Cleaner"],["pm","📋 Property Manager"]].map(([v,l]) => (
+              <div key={v} onClick={() => set("currentCoverage", v)} style={chipStyle(data.currentCoverage === v, v === "nobody" ? c.warn : c.accent)}>{l}</div>
+            ))}
+          </div>
+          {data.currentCoverage && <CoachTip type="tip">{COACHING.currentCoverage[data.currentCoverage]}</CoachTip>}
+          {data.currentCoverage && data.currentCoverage !== "nobody" && (
+            <>
+              <Label>DETAILS</Label>
+              <textarea style={{ ...inputStyle, minHeight: 50, resize: "vertical" }} placeholder="How often? What do they check?" value={data.currentCoverageDetails} onChange={e => set("currentCoverageDetails", e.target.value)} />
+            </>
+          )}
+        </div>
+      );
+
+      const renderLogistics = () => (
+        <div style={{ animation: "slideUp 0.3s ease" }}>
+          <h2 style={{ fontSize: 20, fontWeight: 700, marginBottom: 4 }}>Decision Logistics</h2>
+          <p style={{ fontSize: 13, color: c.textMid, marginBottom: 14 }}>Qualify and remove friction before the price.</p>
+
+          <Label>WHEN DO YOU NEED SERVICE TO START?</Label>
+          <input style={inputStyle} placeholder="e.g., November 1st, ASAP, next season..." value={data.startDate} onChange={e => set("startDate", e.target.value)} />
+
+          <Label>WHO MAKES THE FINAL DECISION?</Label>
+          <input style={inputStyle} placeholder="Just me, spouse and I, property management..." value={data.decisionMaker} onChange={e => set("decisionMaker", e.target.value)} />
+          <CoachTip type="warning">If it's not them, the deal dies in committee. Ask: "Would it help to loop them in now?"</CoachTip>
+
+          <Label>KEY / ACCESS SOLUTION?</Label>
+          <input style={inputStyle} placeholder="Lockbox, smart lock, code, key exchange..." value={data.accessSolution} onChange={e => set("accessSolution", e.target.value)} />
+        </div>
+      );
+
+      const renderDiagnose = () => {
+        const isOceanfront = data.exposure === "oceanfront";
+        const coverageLabel = { nobody: "no current monitoring", neighbor: "informal neighbor check-ins", cleaner: "a cleaning service", pm: "property management" }[data.currentCoverage] || "no formal monitoring";
+        const features = [data.hasPool && "pool", data.hasSpa && "spa", data.hasHotTub && "hot tub", data.hasElevator && "elevator"].filter(Boolean);
+
+        return (
+          <div style={{ animation: "slideUp 0.3s ease" }}>
+            <h2 style={{ fontSize: 20, fontWeight: 700, marginBottom: 4 }}>Diagnosis Statement</h2>
+            <p style={{ fontSize: 13, color: c.textMid, marginBottom: 14 }}>Summarize, then deliver the standard.</p>
+
+            {/* Past issues reference */}
+            {data.pastIssues === "yes" && data.issueDetails && (
+              <div style={{ background: c.warnBg, border: `1px solid ${c.warn}30`, borderRadius: 8, padding: "10px 14px", marginBottom: 12 }}>
+                <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: "0.1em", color: c.warn, marginBottom: 4 }}>📋 PAST ISSUES (from Risk step)</div>
+                <div style={{ fontSize: 13, color: c.textMid }}>{data.issueDetails}</div>
+              </div>
+            )}
+
+            {data.biggestConcern && (
+              <div style={{ background: c.blueBg, border: `1px solid ${c.blue}30`, borderRadius: 8, padding: "10px 14px", marginBottom: 12 }}>
+                <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: "0.1em", color: c.blue, marginBottom: 4 }}>🎯 THEIR BIGGEST CONCERN</div>
+                <div style={{ fontSize: 13, color: c.textMid }}>"{data.biggestConcern}"</div>
+              </div>
+            )}
+
+            <CoachTip type="script">
+              <div style={{ fontSize: 14, lineHeight: 1.8, color: c.text }}>
+                "Based on what you've told me — {data.vacancyType === "fulltime" ? "a full-time vacant property" : data.vacancyType === "seasonal" ? "a seasonal vacancy" : "a vacancy"}
+                {data.vacantMonths ? ` with ${data.vacantMonths} months unoccupied per year` : data.vacancyDuration ? ` of ${data.vacancyDuration}` : ""}
+                {isOceanfront ? ", direct oceanfront exposure" : ""}
+                {features.length > 0 ? `, with ${features.join(", ")}` : ""}
+                {data.pastIssues === "yes" ? ", a history of issues while away" : ""}
+                , and {coverageLabel} — <strong>for a property like this, weekly structured oversight is the standard.</strong>"
+              </div>
+            </CoachTip>
+
+            <CoachTip type="tip">"The standard" — not "an option." Not "what we recommend." THE STANDARD. Weekly is what responsible oversight looks like.</CoachTip>
+
+            <Label>EXPLAIN THE SYSTEM (30–45 seconds)</Label>
+            <CoachTip type="script">
+              <div style={{ fontSize: 14, lineHeight: 1.8, color: c.text }}>
+                "Every visit, we perform a systematic interior and exterior check — focusing on water intrusion, HVAC operation, appliance status, security, drainage, and any exposure-related risks. Everything is documented with photo reporting. If anything is discovered, we don't just notify you — we diagnose, coordinate the appropriate vendor, supervise access if needed, and keep you informed step by step until it's resolved."
+              </div>
+            </CoachTip>
+            <CoachTip type="insight">System. Not favors. You're describing a machine, not a neighbor with a key.</CoachTip>
+          </div>
+        );
+      };
+
+      const renderPresent = () => {
+        const discountAmt = rate && discount > 0 ? Math.round(rate.total * 4 * (discount / 100)) : 0;
+        const discountedMonthly = rate ? rate.total * 4 - discountAmt : 0;
+
+        return (
+          <div style={{ animation: "slideUp 0.3s ease" }}>
+            <h2 style={{ fontSize: 20, fontWeight: 700, marginBottom: 4 }}>Present the Price</h2>
+            <p style={{ fontSize: 13, color: c.textMid, marginBottom: 14 }}>Clean. Calm. Then silence.</p>
+
+            {rate ? (
+              <>
+                {/* Price card */}
+                <div style={{
+                  background: "linear-gradient(135deg, #2a3a2e, #1e2b22)", border: `1px solid ${c.accent}40`,
+                  borderRadius: 12, padding: 24, textAlign: "center",
+                }}>
+                  <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: "0.12em", color: c.accent, marginBottom: 10 }}>NEXT DOOR HOME WATCH</div>
+                  <div style={{ fontSize: 12, color: c.textMid, marginBottom: 4 }}>
+                    {data.homeType === "condo" ? "Condo" : data.homeType === "townhouse" ? "Townhouse" : "Home"} · {getSizeTier(parseInt(data.sqft)).tier} sq ft
+                    {data.exposure === "oceanfront" ? " · Oceanfront" : ""}
+                    {data.zone !== "primary" ? ` · ${data.zone === "extended" ? "Extended" : "Outer"} Zone` : ""}
+                  </div>
+                  <div style={{ fontSize: 52, fontWeight: 700, fontFamily: mono, color: c.text, margin: "8px 0" }}>${rate.total}</div>
+                  <div style={{ fontSize: 14, color: c.textMid }}>per weekly visit</div>
+                  <div style={{ fontSize: 13, color: c.textLight, marginTop: 4, fontFamily: mono }}>${rate.total * 4}/month · ${rate.total * 52}/year</div>
+                </div>
+
+                <CoachTip type="script">
+                  <div style={{ fontSize: 15, color: c.text }}>"For your property, the weekly visit rate is <strong>${rate.total} per visit</strong>."</div>
+                </CoachTip>
+                <CoachTip type="warning">
+                  <div style={{ fontWeight: 700, marginBottom: 4 }}>STOP TALKING.</div>
+                  Let them react. Don't justify. Don't fill the silence. The price is the price.
+                </CoachTip>
+
+                {/* Objection Protocol */}
+                <div style={{ marginTop: 16, background: c.card, border: `1px solid ${c.border}`, borderRadius: 10, padding: 16 }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.1em", color: c.warn, marginBottom: 14 }}>⚡ OBJECTION PROTOCOL</div>
+                  <div style={{ display: "grid", gap: 14 }}>
+                    {[
+                      { step: "1", label: "NORMALIZE", text: `"I understand. Most of our clients haven't used a structured home watch service before."` },
+                      { step: "2", label: "FLIP", text: `"What were you expecting?" — Let them anchor first. Don't guess.` },
+                    ].map(item => (
+                      <div key={item.step} style={{ display: "flex", gap: 10 }}>
+                        <div style={{ width: 26, height: 26, borderRadius: "50%", background: c.warnBg, border: `1px solid ${c.warn}40`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 700, color: c.warn, flexShrink: 0 }}>{item.step}</div>
+                        <div>
+                          <div style={{ fontSize: 10, fontWeight: 700, color: c.warn, letterSpacing: "0.08em", marginBottom: 2 }}>{item.label}</div>
+                          <div style={{ fontSize: 13, color: c.textMid, lineHeight: 1.6, fontStyle: "italic" }}>{item.text}</div>
+                        </div>
+                      </div>
+                    ))}
+
+                    {/* Step 3: Re-anchor with options */}
+                    <div style={{ display: "flex", gap: 10 }}>
+                      <div style={{ width: 26, height: 26, borderRadius: "50%", background: c.warnBg, border: `1px solid ${c.warn}40`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 700, color: c.warn, flexShrink: 0 }}>3</div>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: 10, fontWeight: 700, color: c.warn, letterSpacing: "0.08em", marginBottom: 6 }}>RE-ANCHOR — pick one:</div>
+                        <div style={{ display: "grid", gap: 8 }}>
+                          {COACHING.reanchors.map(r => (
+                            <div key={r.id} style={{ background: c.bg, border: `1px solid ${c.border}`, borderRadius: 8, padding: "10px 12px" }}>
+                              <div style={{ fontSize: 10, fontWeight: 700, color: c.accentLight, letterSpacing: "0.06em", marginBottom: 4 }}>{r.label.toUpperCase()}</div>
+                              <div style={{ fontSize: 13, color: c.text, fontStyle: "italic", lineHeight: 1.6 }}>{r.script}</div>
+                              <div style={{ fontSize: 11, color: c.textLight, marginTop: 4 }}>{r.tip}</div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div style={{ display: "flex", gap: 10 }}>
+                      <div style={{ width: 26, height: 26, borderRadius: "50%", background: c.warnBg, border: `1px solid ${c.warn}40`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 700, color: c.warn, flexShrink: 0 }}>4</div>
+                      <div>
+                        <div style={{ fontSize: 10, fontWeight: 700, color: c.warn, letterSpacing: "0.08em", marginBottom: 2 }}>REAFFIRM</div>
+                        <div style={{ fontSize: 13, color: c.textMid, lineHeight: 1.6, fontStyle: "italic" }}>"For your property and exposure level, weekly oversight is the responsible approach."</div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 90-Day Discount Tool */}
+                <div style={{ marginTop: 16, background: c.card, border: `1px solid ${c.border}`, borderRadius: 10, padding: 16 }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.1em", color: c.accent, marginBottom: 6 }}>🎁 90-DAY ONBOARDING INCENTIVE</div>
+                  <div style={{ fontSize: 11, color: c.textLight, marginBottom: 12 }}>LAST RESORT — only after holding the line, only for ideal clients.</div>
+
+                  <div style={{ display: "flex", gap: 6 }}>
+                    {[0, 10, 15, 20, 25].map(pct => (
+                      <div key={pct} onClick={() => setDiscount(pct)}
+                        style={{
+                          ...chipStyle(discount === pct, pct === 0 ? c.textMid : c.accent),
+                          flex: 1, justifyContent: "center", padding: "10px 6px",
+                        }}>
+                        {pct === 0 ? "None" : `${pct}%`}
+                      </div>
+                    ))}
+                  </div>
+
+                  {discount > 0 && rate && (
+                    <div style={{ marginTop: 12, padding: 14, background: c.accentBg, border: `1px solid ${c.accent}40`, borderRadius: 8 }}>
+                      <div style={{ fontSize: 13, color: c.text, lineHeight: 1.7 }}>
+                        <span style={{ fontFamily: mono, fontWeight: 700, color: c.accent }}>{discount}% off</span> for 3 months:
+                      </div>
+                      <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginTop: 6 }}>
+                        <span style={{ fontSize: 11, color: c.textLight, textDecoration: "line-through", fontFamily: mono }}>${rate.total * 4}/mo</span>
+                        <span style={{ fontSize: 9, color: c.textLight }}>→</span>
+                        <span style={{ fontSize: 22, fontWeight: 700, fontFamily: mono, color: c.accent }}>${discountedMonthly}/mo</span>
+                      </div>
+                      <div style={{ fontSize: 12, color: c.textMid, marginTop: 6 }}>
+                        Saves <span style={{ color: c.accent, fontWeight: 600, fontFamily: mono }}>${discountAmt * 3}</span> over 90 days
+                      </div>
+                      <CoachTip type="script">
+                        <div style={{ fontSize: 14, color: c.text }}>
+                          "I can offer you {discount}% off your monthly invoice for the first 3 months — that saves you approximately ${discountAmt * 3}. It's a one-time onboarding incentive while we get everything set up."
+                        </div>
+                      </CoachTip>
+                    </div>
+                  )}
+                </div>
+
+                {/* PDF + Customer View buttons */}
+                <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
+                  <button onClick={() => generatePDF(data, rate, discount)} style={{
+                    flex: 1, padding: "14px 0", borderRadius: 8, background: c.accent,
+                    border: "none", color: "#fff", fontSize: 14, fontWeight: 600, cursor: "pointer",
+                  }}>📄 Download PDF Quote</button>
+                  <button onClick={() => setCustomerView(true)} style={{
+                    flex: 1, padding: "14px 0", borderRadius: 8, background: c.accentBg,
+                    border: `1px solid ${c.accent}40`, color: c.accent, fontSize: 14, fontWeight: 600, cursor: "pointer",
+                  }}>👤 Show Customer</button>
+                </div>
+              </>
+            ) : (
+              <div style={{ padding: 32, textAlign: "center", color: c.textLight, background: c.card, borderRadius: 8, border: `1px solid ${c.border}` }}>
+                <div style={{ fontSize: 24, marginBottom: 8 }}>🏠</div>
+                Go back to Property and fill in type + square footage to generate a rate.
+              </div>
+            )}
+          </div>
+        );
+      };
+
+      const renderClose = () => (
+        <div style={{ animation: "slideUp 0.3s ease" }}>
+          <h2 style={{ fontSize: 20, fontWeight: 700, marginBottom: 4 }}>Close</h2>
+          <p style={{ fontSize: 13, color: c.textMid, marginBottom: 14 }}>Simple ask. Don't oversell past this point.</p>
+
+          <CoachTip type="script">
+            <div style={{ fontSize: 14, lineHeight: 1.8, color: c.text }}>{COACHING.close.script}</div>
+          </CoachTip>
+          <CoachTip type="tip">{COACHING.close.tip}</CoachTip>
+
+          {/* Call Summary */}
+          <div style={{ marginTop: 20, background: c.card, border: `1px solid ${c.border}`, borderRadius: 10, padding: 16 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.1em", color: c.accent, marginBottom: 14 }}>CALL SUMMARY</div>
+            <div style={{ display: "grid", gap: 8, fontSize: 13, color: c.textMid }}>
+              {fullName && <div><span style={{ color: c.textLight }}>Prospect:</span> {fullName}</div>}
+              {data.address && <div><span style={{ color: c.textLight }}>Address:</span> {data.address}</div>}
+              {data.phone && <div><span style={{ color: c.textLight }}>Phone:</span> {data.phone}</div>}
+              {data.email && <div><span style={{ color: c.textLight }}>Email:</span> {data.email}</div>}
+              {data.homeType && <div><span style={{ color: c.textLight }}>Property:</span> {data.homeType} · {data.sqft ? `${parseInt(data.sqft).toLocaleString()} sq ft` : "TBD"}</div>}
+              {data.exposure && <div><span style={{ color: c.textLight }}>Exposure:</span> {data.exposure}{data.zone && data.zone !== "primary" ? ` · ${data.zone} zone` : ""}</div>}
+              {(() => { const f = [data.hasPool&&"pool", data.hasSpa&&"spa", data.hasHotTub&&"hot tub", data.hasElevator&&"elevator"].filter(Boolean); return f.length > 0 ? <div><span style={{ color: c.textLight }}>Features:</span> {f.join(", ")}</div> : null; })()}
+              {data.vacancyType && <div><span style={{ color: c.textLight }}>Vacancy:</span> {data.vacancyType}{data.vacantMonths ? ` — ${data.vacantMonths} months/year` : ""}</div>}
+              {data.currentCoverage && <div><span style={{ color: c.textLight }}>Current coverage:</span> {data.currentCoverage}</div>}
+              {data.pastIssues && <div><span style={{ color: c.textLight }}>Past issues:</span> {data.pastIssues}{data.issueDetails ? ` — ${data.issueDetails}` : ""}</div>}
+              {data.insuranceClaims && <div><span style={{ color: c.textLight }}>Insurance claims:</span> {data.insuranceClaims}</div>}
+              {data.insuranceVacant && <div><span style={{ color: c.textLight }}>Insurer knows vacant:</span> {data.insuranceVacant}</div>}
+              {data.biggestConcern && <div><span style={{ color: c.textLight }}>Biggest concern:</span> "{data.biggestConcern}"</div>}
+              {data.knownProblems && <div><span style={{ color: c.textLight }}>Known problems:</span> {data.knownProblems}</div>}
+              {rate && <div><span style={{ color: c.textLight }}>Quoted:</span> <span style={{ color: c.accent, fontWeight: 600, fontFamily: mono }}>${rate.total}/visit · ${rate.total * 4}/mo</span>{discount > 0 ? <span style={{ color: c.warn }}> ({discount}% intro for 90 days)</span> : ""}</div>}
+              {data.startDate && <div><span style={{ color: c.textLight }}>Start:</span> {data.startDate}</div>}
+              {data.decisionMaker && <div><span style={{ color: c.textLight }}>Decision maker:</span> {data.decisionMaker}</div>}
+              {data.accessSolution && <div><span style={{ color: c.textLight }}>Access:</span> {data.accessSolution}</div>}
+              {data.notes && <div style={{ marginTop: 6, borderTop: `1px solid ${c.border}`, paddingTop: 8 }}><span style={{ color: c.textLight }}>Notes:</span><br />{data.notes}</div>}
+            </div>
+          </div>
+
+          {rate && (
+            <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
+              <button onClick={() => generatePDF(data, rate, discount)} style={{
+                flex: 1, padding: "14px 0", borderRadius: 8, background: c.accent,
+                border: "none", color: "#fff", fontSize: 14, fontWeight: 600, cursor: "pointer",
+              }}>📄 Download PDF Quote</button>
+            </div>
+          )}
+        </div>
+      );
+
+      const renderers = [renderFrame, renderProperty, renderRisk, renderCoverage, renderLogistics, renderDiagnose, renderPresent, renderClose];
+
+      // ─── Customer View ─────
+      const renderCustomerView = () => {
+        const discountAmt = rate && discount > 0 ? Math.round(rate.total * 4 * (discount / 100)) : 0;
+        const discountedMonthly = rate ? rate.total * 4 - discountAmt : 0;
+
+        return (
+          <div style={{ position: "fixed", inset: 0, background: "#f7f5f0", zIndex: 1000, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 24 }}>
+            <div style={{ maxWidth: 400, width: "100%", textAlign: "center" }}>
+              <div style={{ fontSize: 12, fontWeight: 600, letterSpacing: "0.15em", color: "#3a6b47", marginBottom: 8 }}>NEXT DOOR HOME WATCH</div>
+              <div style={{ width: 40, height: 1, background: "#3a6b4740", margin: "0 auto 24px" }} />
+              {rate ? (
+                <>
+                  {fullName && <div style={{ fontSize: 15, color: "#4a453c", marginBottom: 4 }}>Prepared for {fullName}</div>}
+                  <div style={{ fontSize: 13, color: "#7a756c", marginBottom: 20 }}>
+                    {data.homeType === "condo" ? "Condominium" : data.homeType === "townhouse" ? "Townhouse" : "Single Family Home"}
+                    {data.sqft ? ` · ${parseInt(data.sqft).toLocaleString()} sq ft` : ""}
+                    {data.exposure === "oceanfront" ? " · Oceanfront" : ""}
+                  </div>
+                  <div style={{ fontSize: 56, fontWeight: 700, fontFamily: "'DM Mono', monospace", color: "#2a2520" }}>${rate.total}</div>
+                  <div style={{ fontSize: 15, color: "#7a756c", marginTop: 4 }}>per weekly visit</div>
+                  <div style={{ marginTop: 20, padding: "12px 24px", background: "#3a6b4710", borderRadius: 8, display: "inline-block" }}>
+                    <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 14, color: "#3a6b47" }}>${rate.total * 4}/month</span>
+                  </div>
+                  {discount > 0 && (
+                    <div style={{ marginTop: 16, padding: "12px 24px", background: "#3a6b4715", borderRadius: 8, border: "1px solid #3a6b4730" }}>
+                      <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: "0.1em", color: "#3a6b47", marginBottom: 4 }}>90-DAY ONBOARDING</div>
+                      <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 18, color: "#2a2520", fontWeight: 700 }}>${discountedMonthly}/mo <span style={{ fontSize: 13, color: "#7a756c", fontWeight: 400 }}>for 3 months</span></div>
+                      <div style={{ fontSize: 12, color: "#7a756c", marginTop: 4 }}>Save ${discountAmt * 3} total</div>
+                    </div>
+                  )}
+                  <div style={{ marginTop: 28, fontSize: 12, color: "#a09a90", lineHeight: 1.9, maxWidth: 320, margin: "28px auto 0" }}>
+                    Systematic weekly interior & exterior inspection<br />
+                    Photo-documented reporting<br />
+                    Vendor coordination & issue resolution<br />
+                    Licensed & Insured
+                  </div>
+                </>
+              ) : (
+                <div style={{ color: "#a09a90", fontSize: 14 }}>Property details needed to generate quote.</div>
+              )}
+            </div>
+            <button onClick={() => setCustomerView(false)} style={{
+              position: "fixed", top: 16, right: 16, background: "#2a2520", color: "#f7f5f0",
+              border: "none", borderRadius: 6, padding: "8px 16px", fontSize: 12, fontWeight: 600, cursor: "pointer",
+            }}>✕ Back</button>
+          </div>
+        );
+      };
+
+      // ─── MAIN LAYOUT ─────
+      return (
+        <div style={{ height: "100dvh", display: "flex", flexDirection: "column", background: c.bg }}>
+          {customerView && renderCustomerView()}
+          <NotesDrawer />
+
+          {/* TOP BAR */}
+          <div style={{
+            height: 50, padding: "0 12px", display: "flex", alignItems: "center",
+            justifyContent: "space-between", borderBottom: `1px solid ${c.border}`,
+            background: c.card, flexShrink: 0,
+          }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0, flex: 1 }}>
+              <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.12em", color: c.accent, flexShrink: 0 }}>NDHW</span>
+              <span style={{ color: c.border, flexShrink: 0 }}>|</span>
+              {fullName ? (
+                <span style={{ fontSize: 14, fontWeight: 600, color: c.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{fullName}</span>
+              ) : (
+                <span style={{ fontSize: 13, color: c.textLight }}>Discovery Call</span>
+              )}
+            </div>
+            <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+              <button onClick={() => setShowCoach(!showCoach)} style={{
+                background: showCoach ? c.coachBg : "transparent",
+                border: `1px solid ${showCoach ? c.coachBorder : c.border}`,
+                borderRadius: 6, padding: "6px 10px", fontSize: 11, fontWeight: 600,
+                color: showCoach ? c.coach : c.textLight, cursor: "pointer",
+                WebkitTapHighlightColor: "transparent",
+              }}>
+                💡 {showCoach ? "ON" : "OFF"}
+              </button>
+              <button onClick={() => setNotesOpen(!notesOpen)} style={{
+                background: notesOpen ? c.warnBg : data.notes ? c.warnBg : "transparent",
+                border: `1px solid ${notesOpen ? c.warn + "60" : data.notes ? c.warn + "40" : c.border}`,
+                borderRadius: 6, padding: "6px 10px", fontSize: 11, fontWeight: 600,
+                color: notesOpen ? c.warn : data.notes ? c.warn : c.textLight, cursor: "pointer",
+                WebkitTapHighlightColor: "transparent",
+              }}>
+                📝
+              </button>
+            </div>
+          </div>
+
+          {/* STEP NAV */}
+          <div style={{
+            display: "flex", gap: 2, padding: "6px 8px",
+            background: c.card, borderBottom: `1px solid ${c.border}`,
+            overflowX: "auto", flexShrink: 0, WebkitOverflowScrolling: "touch",
+          }}>
+            {steps.map((s, i) => (
+              <button key={s.id} onClick={() => setStep(i)} style={{
+                background: i === step ? c.accent + "20" : "transparent",
+                border: `1px solid ${i === step ? c.accent + "50" : "transparent"}`,
+                borderRadius: 6, padding: "7px 10px", fontSize: 11, fontWeight: 600,
+                color: i === step ? c.accent : i < step ? c.textMid : c.textLight,
+                cursor: "pointer", whiteSpace: "nowrap", transition: "all 0.15s",
+                display: "flex", alignItems: "center", gap: 4,
+                WebkitTapHighlightColor: "transparent",
+              }}>
+                <span style={{ fontSize: 12 }}>{s.icon}</span>
+                <span>{s.label}</span>
+              </button>
+            ))}
+          </div>
+
+          {/* Live rate bar */}
+          {rate && step !== 6 && (
+            <div style={{
+              padding: "7px 14px", background: c.accentBg,
+              borderBottom: `1px solid ${c.accent}30`,
+              display: "flex", alignItems: "center", justifyContent: "space-between", flexShrink: 0,
+            }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ fontFamily: mono, fontSize: 16, fontWeight: 700, color: c.accent }}>${rate.total}/visit</span>
+                <span style={{ fontSize: 11, color: c.textLight }}>·</span>
+                <span style={{ fontFamily: mono, fontSize: 12, color: c.textMid }}>${rate.total * 4}/mo</span>
+              </div>
+            </div>
+          )}
+
+          {/* CONTENT */}
+          <div ref={scrollRef} style={{ flex: 1, overflowY: "auto", padding: "16px 14px 120px", WebkitOverflowScrolling: "touch" }}>
+            <div style={{ maxWidth: 560, margin: "0 auto" }}>
+              {renderers[step]()}
+            </div>
+          </div>
+
+          {/* BOTTOM NAV */}
+          <div style={{
+            padding: "10px 12px", borderTop: `1px solid ${c.border}`,
+            background: c.card, display: "flex", gap: 8, flexShrink: 0,
+          }}>
+            <button onClick={() => setStep(Math.max(0, step - 1))} disabled={step === 0}
+              style={{
+                flex: 1, padding: "14px 0", borderRadius: 8,
+                background: c.bg, border: `1px solid ${c.border}`,
+                color: step === 0 ? c.textLight : c.textMid,
+                fontSize: 14, fontWeight: 600, cursor: step === 0 ? "default" : "pointer",
+                WebkitTapHighlightColor: "transparent", opacity: step === 0 ? 0.4 : 1,
+              }}>
+              ← Back
+            </button>
+            <button onClick={() => setStep(Math.min(steps.length - 1, step + 1))} disabled={step === steps.length - 1}
+              style={{
+                flex: 2, padding: "14px 0", borderRadius: 8,
+                background: step === steps.length - 1 ? c.accent + "40" : c.accent,
+                border: "none", color: step === steps.length - 1 ? c.textMid : "#fff",
+                fontSize: 14, fontWeight: 600, cursor: step === steps.length - 1 ? "default" : "pointer",
+                WebkitTapHighlightColor: "transparent",
+              }}>
+              {step === steps.length - 1 ? "✓ Call Complete" : `Next: ${steps[step + 1]?.label} →`}
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  </script>
+</body>
+</html>
