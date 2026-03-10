@@ -279,8 +279,218 @@
     }
 
     /* ═══════════════════════════════════════
-       COACHING DATABASE
+       CALL NOTES PDF (Operator-only record)
     ═══════════════════════════════════════ */
+    function generateCallNotesPDF(data, rate, discount) {
+      const { jsPDF } = window.jspdf;
+      const doc = new jsPDF({ unit: "pt", format: "letter" });
+      const W = 612, H = 792;
+      const mg = { l: 45, r: 45 };
+      const cw = W - mg.l - mg.r;
+      let y = 45;
+      let pageNum = 1;
+
+      const green = [58, 107, 71];
+      const dark = [42, 37, 32];
+      const mid = [100, 95, 86];
+      const light = [140, 134, 124];
+      const divider = [220, 216, 210];
+
+      const name = [data.firstName, data.lastName].filter(Boolean).join(" ") || "Unknown Prospect";
+
+      function checkPage(needed) {
+        if (y + needed > H - 60) {
+          // Footer on current page
+          doc.setDrawColor(...divider);
+          doc.setLineWidth(0.5);
+          doc.line(mg.l, H - 50, W - mg.r, H - 50);
+          doc.setFontSize(7);
+          doc.setTextColor(...light);
+          doc.text(`NDHW Call Notes — ${name} — Page ${pageNum}`, W / 2, H - 36, { align: "center" });
+          doc.text("INTERNAL — NOT FOR DISTRIBUTION", W / 2, H - 26, { align: "center" });
+          doc.addPage();
+          pageNum++;
+          y = 45;
+        }
+      }
+
+      function sectionHeader(label) {
+        checkPage(30);
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(8);
+        doc.setTextColor(...green);
+        doc.text(label, mg.l, y);
+        y += 4;
+        doc.setDrawColor(...green);
+        doc.setLineWidth(0.75);
+        doc.line(mg.l, y, mg.l + 100, y);
+        y += 12;
+      }
+
+      function field(label, value) {
+        if (!value && value !== 0) return;
+        checkPage(18);
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(8.5);
+        doc.setTextColor(...mid);
+        doc.text(label + ":", mg.l + 4, y);
+        doc.setFont("helvetica", "normal");
+        doc.setFontSize(9);
+        doc.setTextColor(...dark);
+        const labelW = doc.getTextWidth(label + ": ");
+        const maxW = cw - labelW - 8;
+        const lines = doc.splitTextToSize(String(value), maxW);
+        doc.text(lines, mg.l + 4 + labelW, y);
+        y += lines.length * 13 + 4;
+      }
+
+      function textBlock(text, maxWidth) {
+        if (!text) return;
+        doc.setFont("helvetica", "normal");
+        doc.setFontSize(9);
+        doc.setTextColor(...dark);
+        const lines = doc.splitTextToSize(text, maxWidth || cw - 8);
+        lines.forEach(line => {
+          checkPage(14);
+          doc.text(line, mg.l + 4, y);
+          y += 13;
+        });
+        y += 4;
+      }
+
+      // ── HEADER ──
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(10);
+      doc.setTextColor(...green);
+      doc.text("NEXT DOOR HOME WATCH", mg.l, y);
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(8);
+      doc.setTextColor(...light);
+      doc.text("INTERNAL CALL NOTES — NOT FOR DISTRIBUTION", W - mg.r, y, { align: "right" });
+      y += 24;
+
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(18);
+      doc.setTextColor(...dark);
+      doc.text(name, mg.l, y);
+      y += 16;
+
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(9);
+      doc.setTextColor(...mid);
+      doc.text(`Call Date: ${new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" })}`, mg.l, y);
+      y += 20;
+
+      doc.setDrawColor(...green);
+      doc.setLineWidth(1.5);
+      doc.line(mg.l, y, W - mg.r, y);
+      y += 20;
+
+      // ── PROSPECT INFO ──
+      sectionHeader("PROSPECT INFO");
+      field("Name", name);
+      field("Phone", data.phone);
+      field("Email", data.email);
+      field("Address", data.address);
+      y += 6;
+
+      // ── PROPERTY DETAILS ──
+      sectionHeader("PROPERTY DETAILS");
+      const typeLabel = { house: "House", townhouse: "Townhouse", condo: "Condo" }[data.homeType] || "—";
+      const expLabel = { inland: "Inland", coastal: "Coastal Proximity", oceanfront: "Direct Oceanfront" }[data.exposure] || "—";
+      const zoneLabel = { primary: "Primary", extended: "Extended", outer: "Outer" }[data.zone] || "—";
+      const vacLabel = { seasonal: "Seasonal", temporary: "Temporary", fulltime: "Full-Time Vacant" }[data.vacancyType] || "—";
+
+      field("Type", typeLabel);
+      field("Square Footage", data.sqft ? `${parseInt(data.sqft).toLocaleString()} sq ft (${getSizeTier(parseInt(data.sqft)).tier})` : null);
+      field("Exposure", expLabel);
+      field("Zone", zoneLabel);
+      field("HOA Exterior", data.hoaExterior ? "Yes — HOA handles exterior" : "No — Owner responsible");
+      field("Vacancy Type", vacLabel);
+      field("Vacant Months/Year", data.vacantMonths ? `${data.vacantMonths} months` : null);
+
+      const features = [data.hasPool && "Pool", data.hasSpa && "Spa", data.hasHotTub && "Hot Tub", data.hasElevator && "Elevator"].filter(Boolean);
+      field("Special Features", features.length > 0 ? features.join(", ") : "None noted");
+      y += 6;
+
+      // ── RISK PROFILE ──
+      sectionHeader("RISK PROFILE");
+      field("Past Issues While Away", data.pastIssues === "yes" ? "YES" : data.pastIssues === "no" ? "No" : "Not asked");
+      if (data.issueDetails) field("Issue Details", data.issueDetails);
+      field("Insurance Claims (10yr)", data.insuranceClaims === "yes" ? "YES" : data.insuranceClaims === "no" ? "No" : data.insuranceClaims === "unknown" ? "Not sure" : "Not asked");
+      field("Insurer Knows Vacant", data.insuranceVacant === "yes" ? "Yes" : data.insuranceVacant === "no" ? "NO — flag this" : data.insuranceVacant === "unknown" ? "Not sure" : "Not asked");
+      field("Smart Water Shutoff", data.smartShutoff || "Not asked");
+      field("Alarm System", data.alarm || "Not asked");
+      field("Cameras", data.cameras || "Not asked");
+      field("Known Problems", data.knownProblems);
+      field("Biggest Concern", data.biggestConcern);
+      y += 6;
+
+      // ── CURRENT COVERAGE ──
+      sectionHeader("CURRENT COVERAGE");
+      const covLabel = { nobody: "Nobody — no monitoring", neighbor: "Neighbor", cleaner: "Cleaning service", pm: "Property Manager" }[data.currentCoverage] || "Not discussed";
+      field("Who's Watching", covLabel);
+      field("Details", data.currentCoverageDetails);
+      y += 6;
+
+      // ── DECISION LOGISTICS ──
+      sectionHeader("DECISION LOGISTICS");
+      field("Target Start Date", data.startDate);
+      field("Decision Maker", data.decisionMaker);
+      field("Access Solution", data.accessSolution);
+      y += 6;
+
+      // ── QUOTED RATE ──
+      if (rate) {
+        sectionHeader("QUOTED RATE");
+        checkPage(80);
+
+        doc.setFillColor(247, 245, 240);
+        doc.roundedRect(mg.l, y, cw, 60, 4, 4, "F");
+
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(22);
+        doc.setTextColor(...green);
+        doc.text(`$${rate.total}/visit`, mg.l + 16, y + 25);
+
+        doc.setFont("helvetica", "normal");
+        doc.setFontSize(10);
+        doc.setTextColor(...mid);
+        doc.text(`$${rate.total * 4}/month  ·  $${rate.total * 52}/year`, mg.l + 16, y + 44);
+
+        doc.setFontSize(8);
+        doc.setTextColor(...light);
+        const breakdown = `Base $${rate.base} + Size $${rate.sizeFee} + Exp $${rate.expFee}${rate.expWaived ? " (waived)" : ""} + Type $${rate.typeFee} + Zone $${rate.zoneFee}`;
+        doc.text(breakdown, W - mg.r - 16, y + 25, { align: "right" });
+
+        y += 72;
+
+        if (discount > 0) {
+          const discAmt = Math.round(rate.total * 4 * (discount / 100));
+          const discMonthly = rate.total * 4 - discAmt;
+          field("90-Day Onboarding Discount", `${discount}% → $${discMonthly}/mo for 3 months (saves $${discAmt * 3})`);
+        }
+        y += 6;
+      }
+
+      // ── FREE-FORM NOTES ──
+      if (data.notes) {
+        sectionHeader("CALL NOTES");
+        textBlock(data.notes);
+      }
+
+      // ── FOOTER (last page) ──
+      doc.setDrawColor(...divider);
+      doc.setLineWidth(0.5);
+      doc.line(mg.l, H - 50, W - mg.r, H - 50);
+      doc.setFontSize(7);
+      doc.setTextColor(...light);
+      doc.text(`NDHW Call Notes — ${name} — Page ${pageNum}`, W / 2, H - 36, { align: "center" });
+      doc.text("INTERNAL — NOT FOR DISTRIBUTION", W / 2, H - 26, { align: "center" });
+
+      const fname = `NDHW-CallNotes-${name.replace(/\s+/g, "-")}-${new Date().toISOString().slice(0,10)}`;
+      doc.save(`${fname}.pdf`);
+    }
     const COACHING = {
       frame: {
         script: `"Absolutely, I'd be happy to walk you through how our service works. First, let me learn a little about the property so I can recommend the right level of oversight."`,
@@ -843,12 +1053,17 @@
                   <button onClick={() => generatePDF(data, rate, discount)} style={{
                     flex: 1, padding: "14px 0", borderRadius: 8, background: c.accent,
                     border: "none", color: "#fff", fontSize: 14, fontWeight: 600, cursor: "pointer",
-                  }}>📄 Download PDF Quote</button>
+                  }}>📄 Quote PDF</button>
                   <button onClick={() => setCustomerView(true)} style={{
                     flex: 1, padding: "14px 0", borderRadius: 8, background: c.accentBg,
                     border: `1px solid ${c.accent}40`, color: c.accent, fontSize: 14, fontWeight: 600, cursor: "pointer",
-                  }}>👤 Show Customer</button>
+                  }}>👤 Customer</button>
                 </div>
+                <button onClick={() => generateCallNotesPDF(data, rate, discount)} style={{
+                  width: "100%", padding: "14px 0", borderRadius: 8, marginTop: 8,
+                  background: c.warnBg, border: `1px solid ${c.warn}40`,
+                  color: c.warn, fontSize: 14, fontWeight: 600, cursor: "pointer",
+                }}>📋 Save Call Notes PDF</button>
               </>
             ) : (
               <div style={{ padding: 32, textAlign: "center", color: c.textLight, background: c.card, borderRadius: 8, border: `1px solid ${c.border}` }}>
@@ -901,8 +1116,19 @@
               <button onClick={() => generatePDF(data, rate, discount)} style={{
                 flex: 1, padding: "14px 0", borderRadius: 8, background: c.accent,
                 border: "none", color: "#fff", fontSize: 14, fontWeight: 600, cursor: "pointer",
-              }}>📄 Download PDF Quote</button>
+              }}>📄 Quote PDF</button>
+              <button onClick={() => generateCallNotesPDF(data, rate, discount)} style={{
+                flex: 1, padding: "14px 0", borderRadius: 8, background: c.warnBg,
+                border: `1px solid ${c.warn}40`, color: c.warn, fontSize: 14, fontWeight: 600, cursor: "pointer",
+              }}>📋 Call Notes PDF</button>
             </div>
+          )}
+          {!rate && (
+            <button onClick={() => generateCallNotesPDF(data, rate, discount)} style={{
+              width: "100%", padding: "14px 0", borderRadius: 8, marginTop: 16,
+              background: c.warnBg, border: `1px solid ${c.warn}40`,
+              color: c.warn, fontSize: 14, fontWeight: 600, cursor: "pointer",
+            }}>📋 Save Call Notes PDF</button>
           )}
         </div>
       );
